@@ -34,6 +34,24 @@ def download_and_extract_kmz(url, day):
     os.remove(kmz_path)
     logging.debug(f"KMZ file for {day} extracted.")
 
+def extract_qpf_value(description):
+    """Extract QPF value from HTML table in description"""
+    try:
+        # Find the QPF row in the HTML table
+        qpf_start = description.find('<td>QPF</td>')
+        if qpf_start == -1:
+            return 0.0
+        
+        # Find the next <td> with the value
+        value_start = description.find('<td>', qpf_start + 12)  # 12 = len('<td>QPF</td>')
+        value_end = description.find('</td>', value_start)
+        
+        # Extract and clean the value
+        qpf_value = description[value_start + 4:value_end].strip()
+        return float(qpf_value)
+    except:
+        return 0.0
+
 def get_forecast_geojson(day):
     kml_file = f"forecast_{day}/doc.kml"
     if not os.path.exists(kml_file):
@@ -81,15 +99,20 @@ def get_forecast_geojson(day):
         else:
             return '#00FF7F'  # Lime (or no color)
 
+    #this worked for the old QPF KML format
+    # field_name = 'Name'  # Adjust this based on your actual field name
+    # gdf['color'] = gdf[field_name].astype(float).apply(get_color)
+    # gdf['qpf'] = gdf[field_name].astype(float)  # Add QPF value to properties
 
-    field_name = 'Name'  # Adjust this based on your actual field name
-    gdf['color'] = gdf[field_name].astype(float).apply(get_color)
-    gdf['qpf'] = gdf[field_name].astype(float)  # Add QPF value to properties
+    #updated in 2025
+
+    gdf['qpf'] = gdf['Description'].apply(extract_qpf_value)
+    gdf['color'] = gdf['qpf'].apply(get_color)
 
     geojson = json.loads(gdf.to_json())
     for feature, color in zip(geojson['features'], gdf['color']):
         feature['properties']['style'] = {'color': color, 'weight': 0, 'opacity': 1}
-        feature['properties']['qpf'] = feature['properties'][field_name]
+        #feature['properties']['qpf'] = feature['properties'][field_name]
 
     return geojson
 
@@ -101,7 +124,8 @@ def calculate_average_qpf(kml_file, polygon, cell_size=0.01):
     gdf = gdf.to_crs(epsg=4326)  # Ensure the CRS is WGS84
 
     # Extract QPF values and geometries
-    gdf['QPF'] = gdf['Name'].astype(float)  # Ensure QPF values are float
+    #gdf['QPF'] = gdf['Name'].astype(float)  # Ensure QPF values are float
+    gdf['QPF'] = gdf['Description'].apply(extract_qpf_value) # Updated 2025 Ensure QPF values are floa
 
     # Clip the QPF data to the preset polygon
     clipped = gpd.clip(gdf, polygon)
@@ -121,7 +145,7 @@ def calculate_average_qpf(kml_file, polygon, cell_size=0.01):
     grid = grid[grid.intersects(polygon)]
 
     # Initialize QPF values in the grid to 0
-    grid['QPF'] = 0
+    grid['QPF'] = 0.0
 
     # Perform spatial join between the clipped data and the grid, taking the max QPF value
     for index, row in clipped.iterrows():
