@@ -116,55 +116,38 @@ def get_forecast_geojson(day):
 
     return geojson
 
-def calculate_average_qpf(kml_file, polygon, cell_size=0.01):
-    #logging.debug(f"Calculating average QPF from {kml_file}...")
-
-    # Load and process KML file
-    gdf = gpd.read_file(kml_file, driver='KML')
-    gdf = gdf.to_crs(epsg=4326)  # Ensure the CRS is WGS84
-
-    # Extract QPF values and geometries
-    #gdf['QPF'] = gdf['Name'].astype(float)  # Ensure QPF values are float
-    gdf['QPF'] = gdf['Description'].apply(extract_qpf_value) # Updated 2025 Ensure QPF values are floa
-
-    # Clip the QPF data to the preset polygon
+def calculate_average_qpf_from_gdf(gdf, polygon, cell_size=0.02):
+    """Calculate maximum QPF using pre-loaded GeoDataFrame"""
+    # Clip the QPF data to the polygon
     clipped = gpd.clip(gdf, polygon)
-
-    # Create a grid covering the entire polygon
-    bounds = polygon.bounds
-    x_min, y_min, x_max, y_max = bounds
-    x_coords = np.arange(x_min, x_max, cell_size)
-    y_coords = np.arange(y_min, y_max, cell_size)
-
-    cells = []
-    for x in x_coords:
-        for y in y_coords:
-            cells.append(box(x, y, x + cell_size, y + cell_size))
-
-    grid = gpd.GeoDataFrame({'geometry': cells}, crs="EPSG:4326")
-    grid = grid[grid.intersects(polygon)]
-
-    # Initialize QPF values in the grid to 0
-    grid['QPF'] = 0.0
-
-    # Perform spatial join between the clipped data and the grid, taking the max QPF value
-    for index, row in clipped.iterrows():
-        intersected_cells = grid[grid.intersects(row.geometry)]
-        grid.loc[intersected_cells.index, 'QPF'] = np.maximum(
-            grid.loc[intersected_cells.index, 'QPF'], row['QPF'])
-
-    # Calculate the average QPF
-    avg_qpf = grid['QPF'].mean()
-    #logging.debug(f"Average QPF calculated: {avg_qpf}")
-
-    return avg_qpf
-
+    
+    if clipped.empty:
+        return 0.0
+    
+    # Return the maximum QPF value (handles overlapping layers)
+    max_qpf = clipped['QPF'].max()
+    return max_qpf
+    
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/watershed_data')
 def watershed_data():
+    # Load all KML files once at the start
+    forecast_data = {}
+    for day in ["Day1", "Day2", "Day3"]:
+        kml_file = f"forecast_{day}/doc.kml"
+        if os.path.exists(kml_file):
+            gdf = gpd.read_file(kml_file, driver='KML')
+            gdf = gdf.to_crs(epsg=4326)
+            gdf['QPF'] = gdf['Description'].apply(extract_qpf_value)
+            forecast_data[day] = gdf
+        else:
+            logging.error(f"KML file not found: {kml_file}")
+            forecast_data[day] = None
+    
+    # Process all polygons against pre-loaded data
     results = {}
     for installation_name, shapefiles in shapefiles_cache.items():
         installation_results = {}
@@ -172,21 +155,26 @@ def watershed_data():
             location_results = []
             for item in polygons:
                 polygon = shape(item['polygon'])
-                avg_qpf_day1 = calculate_average_qpf("forecast_Day1/doc.kml", polygon)
-                avg_qpf_day2 = calculate_average_qpf("forecast_Day2/doc.kml", polygon)
-                avg_qpf_day3 = calculate_average_qpf("forecast_Day3/doc.kml", polygon)
+                
+                # Calculate QPF for all days using pre-loaded data
+                qpf_values = {}
+                for day, gdf in forecast_data.items():
+                    if gdf is not None:
+                        qpf_values[f'avg_qpf_{day.lower()}'] = calculate_average_qpf_from_gdf(gdf, polygon)
+                    else:
+                        qpf_values[f'avg_qpf_{day.lower()}'] = 0.0
+                
                 location_data = {
                     'polygon': mapping(polygon),
                     'name': item['properties'].get('name', 'Unknown'),
                     'installation': installation_name,
                     'shapefile': shapefile_name,
-                    'avg_qpf_day1': avg_qpf_day1,
-                    'avg_qpf_day2': avg_qpf_day2,
-                    'avg_qpf_day3': avg_qpf_day3
+                    **qpf_values
                 }
                 location_results.append(location_data)
             installation_results[shapefile_name] = location_results
         results[installation_name] = installation_results
+    
     return jsonify(results)
 
 @app.route('/geojsonQPF')
