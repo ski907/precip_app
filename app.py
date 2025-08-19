@@ -9,6 +9,11 @@ import json
 import pandas as pd
 import numpy as np
 
+
+import warnings
+# Suppress the GeoPandas warning
+warnings.filterwarnings('ignore', 'GeoSeries.notna', UserWarning)
+
 app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
@@ -116,7 +121,7 @@ def get_forecast_geojson(day):
 
     return geojson
 
-def calculate_average_qpf_from_gdf(gdf, polygon, cell_size=0.02):
+def calculate_average_qpf_from_gdf_OLD(gdf, polygon, cell_size=0.02):
     """Calculate maximum QPF using pre-loaded GeoDataFrame"""
     # Clip the QPF data to the polygon
     clipped = gpd.clip(gdf, polygon)
@@ -127,56 +132,151 @@ def calculate_average_qpf_from_gdf(gdf, polygon, cell_size=0.02):
     # Return the maximum QPF value (handles overlapping layers)
     max_qpf = clipped['QPF'].max()
     return max_qpf
+
+def calculate_average_qpf_from_gdf(gdf, polygon, cell_size=0.02):
+    """Calculate maximum QPF using pre-loaded GeoDataFrame - assumes geometries are already valid"""
+    try:
+        # Fix polygon if invalid (this is the only geometry we need to check each time)
+        if not polygon.is_valid:
+            logging.debug("Fixing invalid polygon geometry")
+            polygon = polygon.buffer(0)
+        
+        # Perform the clip operation
+        clipped = gpd.clip(gdf, polygon)
+        
+        if clipped.empty:
+            logging.debug("No geometries after clipping - polygon may not intersect with data")
+            return 0.0
+        
+        # Return the maximum QPF value (handles overlapping layers)
+        max_qpf = clipped['QPF'].max()
+        return max_qpf if not pd.isna(max_qpf) else 0.0
+        
+    except Exception as e:
+        logging.error(f"Error in calculate_average_qpf_from_gdf: {e}")
+        return 0.0
     
 @app.route('/')
 def index():
     return render_template('index.html')
 
+# @app.route('/watershed_data')
+# def watershed_data():
+#     # Load all KML files once at the start
+#     forecast_data = {}
+#     for day in ["Day1", "Day2", "Day3"]:
+#         kml_file = f"forecast_{day}/doc.kml"
+#         if os.path.exists(kml_file):
+#             gdf = gpd.read_file(kml_file, driver='KML')
+#             gdf = gdf.to_crs(epsg=4326)
+#             gdf['QPF'] = gdf['Description'].apply(extract_qpf_value)
+#             forecast_data[day] = gdf
+#         else:
+#             logging.error(f"KML file not found: {kml_file}")
+#             forecast_data[day] = None
+    
+#     # Process all polygons against pre-loaded data
+#     results = {}
+#     for installation_name, shapefiles in shapefiles_cache.items():
+#         installation_results = {}
+#         for shapefile_name, polygons in shapefiles.items():
+#             location_results = []
+#             for item in polygons:
+#                 polygon = shape(item['polygon'])
+                
+#                 # Calculate QPF for all days using pre-loaded data
+#                 qpf_values = {}
+#                 for day, gdf in forecast_data.items():
+#                     if gdf is not None:
+#                         qpf_values[f'avg_qpf_{day.lower()}'] = calculate_average_qpf_from_gdf(gdf, polygon)
+#                     else:
+#                         qpf_values[f'avg_qpf_{day.lower()}'] = 0.0
+                
+#                 location_data = {
+#                     'polygon': mapping(polygon),
+#                     'name': item['properties'].get('name', 'Unknown'),
+#                     'installation': installation_name,
+#                     'shapefile': shapefile_name,
+#                     **qpf_values
+#                 }
+#                 location_results.append(location_data)
+#             installation_results[shapefile_name] = location_results
+#         results[installation_name] = installation_results
+    
+#     return jsonify(results)
+
 @app.route('/watershed_data')
 def watershed_data():
-    # Load all KML files once at the start
+    # Load all KML files once at the start and fix geometries ONCE
     forecast_data = {}
     for day in ["Day1", "Day2", "Day3"]:
         kml_file = f"forecast_{day}/doc.kml"
         if os.path.exists(kml_file):
-            gdf = gpd.read_file(kml_file, driver='KML')
-            gdf = gdf.to_crs(epsg=4326)
-            gdf['QPF'] = gdf['Description'].apply(extract_qpf_value)
-            forecast_data[day] = gdf
+            try:
+                gdf = gpd.read_file(kml_file, driver='KML')
+                gdf = gdf.to_crs(epsg=4326)
+                gdf['QPF'] = gdf['Description'].apply(extract_qpf_value)
+                
+                # Fix invalid geometries ONCE when loading
+                invalid_mask = ~gdf.geometry.is_valid
+                if invalid_mask.any():
+                    logging.debug(f"Fixing {invalid_mask.sum()} invalid geometries in {day} forecast data")
+                    gdf.loc[invalid_mask, 'geometry'] = gdf.loc[invalid_mask, 'geometry'].buffer(0)
+                
+                # Remove null and empty geometries
+                gdf = gdf[gdf.geometry.notnull() & ~gdf.geometry.is_empty]
+                
+                forecast_data[day] = gdf
+                logging.debug(f"Loaded {len(gdf)} valid geometries for {day}")
+            except Exception as e:
+                logging.error(f"Error loading KML file {kml_file}: {e}")
+                forecast_data[day] = None
         else:
             logging.error(f"KML file not found: {kml_file}")
             forecast_data[day] = None
     
     # Process all polygons against pre-loaded data
     results = {}
+    total_processed = 0
+    errors = 0
+    
     for installation_name, shapefiles in shapefiles_cache.items():
         installation_results = {}
         for shapefile_name, polygons in shapefiles.items():
             location_results = []
             for item in polygons:
-                polygon = shape(item['polygon'])
-                
-                # Calculate QPF for all days using pre-loaded data
-                qpf_values = {}
-                for day, gdf in forecast_data.items():
-                    if gdf is not None:
-                        qpf_values[f'avg_qpf_{day.lower()}'] = calculate_average_qpf_from_gdf(gdf, polygon)
-                    else:
-                        qpf_values[f'avg_qpf_{day.lower()}'] = 0.0
-                
-                location_data = {
-                    'polygon': mapping(polygon),
-                    'name': item['properties'].get('name', 'Unknown'),
-                    'installation': installation_name,
-                    'shapefile': shapefile_name,
-                    **qpf_values
-                }
-                location_results.append(location_data)
+                try:
+                    polygon = shape(item['polygon'])
+                    
+                    # Calculate QPF for all days using pre-loaded data
+                    qpf_values = {}
+                    for day, gdf in forecast_data.items():
+                        if gdf is not None and not gdf.empty:
+                            qpf_values[f'avg_qpf_{day.lower()}'] = calculate_average_qpf_from_gdf(gdf, polygon)
+                        else:
+                            qpf_values[f'avg_qpf_{day.lower()}'] = 0.0
+                    
+                    location_data = {
+                        'polygon': mapping(polygon),
+                        'name': item['properties'].get('name', 'Unknown'),
+                        'installation': installation_name,
+                        'shapefile': shapefile_name,
+                        **qpf_values
+                    }
+                    location_results.append(location_data)
+                    total_processed += 1
+                    
+                except Exception as e:
+                    logging.error(f"Error processing polygon in {installation_name}/{shapefile_name}: {e}")
+                    errors += 1
+                    continue
+                    
             installation_results[shapefile_name] = location_results
         results[installation_name] = installation_results
     
+    logging.info(f"Processed {total_processed} polygons with {errors} errors")
     return jsonify(results)
-
+    
 @app.route('/geojsonQPF')
 def geojsonQPF():
     all_forecast_data = {}

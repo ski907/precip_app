@@ -39,22 +39,43 @@
             font-size: 20px;
             color: #333;
         }
+        .btn {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
     </style>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.11.3/css/jquery.dataTables.css">
     <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.11.3/css/dataTables.bootstrap4.min.css">
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dom-to-image@2.6.0/dist/dom-to-image.min.js"></script>
+    
 </head>
 <body>
     <h1>Precipitation Forecast</h1>
     <div id="map"></div>
     <div id="loading">Analyzing Watershed Data, Please Wait...</div>
+    <div class="section">
+    <button id="generatePdfBtn" class="btn btn-primary" onclick="generatePDF()">Generate PDF Report</button>
+    </div>
     <div id="dataTableContainer" class="section"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script type="text/javascript" charset="utf8" src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.11.3/js/jquery.dataTables.js"></script>
     <script src="{{ url_for('static', filename='js/tableView.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/pdfGenerator.js') }}"></script>
     <script>
         var map = L.map('map').setView([39.8283, -98.5795], 4); // Center of the CONUS with an appropriate zoom level
 
@@ -138,6 +159,8 @@
                 console.error('Layer not found for ID:', layerId);
             }
         }
+
+      
     </script>
 </body>
 </html>
